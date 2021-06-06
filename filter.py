@@ -30,7 +30,7 @@ class Filter(BaseClass):
         self.print(msg=f"Filtering: {typ}_{timeframe}_{feature} from {startdate} to {enddate} at threshold {nthresh}...")
         startdate = pd.to_datetime(startdate)
         enddate= pd.to_datetime(enddate)
-        df = pl.read_parquet(f"{folder}/Datasets/{typ}_{timeframe}_{feature}_pivot.parquet").to_pandas()
+        df = pl.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_{feature}_pivot.parquet").to_pandas()
         df.set_index('date', inplace=True)
         df.index = pd.to_datetime(df.index)
         df = df.loc[startdate:enddate, :] 
@@ -59,7 +59,8 @@ class Filter(BaseClass):
                 df.drop(columns=col, inplace=True)
 
         self.print(msg=f"Filtering: {pd.isnull(df).sum().sum()} missing values left!")
-        pl.from_pandas(df).to_csv("AAAA.csv")
+        
+        return df
         
 
 if __name__ == "__main__":
