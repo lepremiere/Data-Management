@@ -8,7 +8,7 @@ if __name__ == "__main__":
     types = ["ETF"]
     timeframes = [1440]
     features = ["close"]
-    startdate = "2017-06-01"
+    startdate = "2017-01-01"
     enddate = "2021-06-03"
 
     dm = DataManager(folder=folder, verbose=True)
