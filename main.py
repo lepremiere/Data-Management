@@ -1,18 +1,24 @@
-from dataManager import DataManager
-from filter import Filter
+import pandas as pd
+from data_manager import DataManager
 
 if __name__ == "__main__":
 
-    folder = "D:/Data/EOD"
-    exchanges = ["F", "XETRA"]
+    folder = "D:/EOD/"
     types = ["ETF"]
     timeframes = [1440]
-    features = ["close"]
-    startdate = "2017-01-01"
-    enddate = "2021-06-03"
+    return_periods = [1, 3, 5, 7, 14, 21, 30]
+    start = pd.to_datetime("2019-06-01")
+    end = pd.to_datetime("2022-01-01")
 
-    dm = DataManager(folder=folder, verbose=True)
-    filt = Filter(folder=folder)
-    dm.pivot_table(types=types, timeframes=timeframes, features=features, remainder=features[0])
-    df = filt.filter_pivot_table(typ=types[0], timeframe=timeframes[0], feature=features[0], startdate=startdate, enddate=enddate)
-    df.to_parquet(f"{folder}/Datasets/ETF_{timeframes[0]}_{features[0]}_pivot_filt.parquet", compression="gzip")
+    dm = DataManager(folder=folder, plot=True, num_cores=16)
+    dm.create_dataset(types=types, timeframes=timeframes,
+                     indicators=True,
+                     normalize=True,
+                     historic_returns=return_periods,
+                     forward_returns=return_periods,
+                     n_rand=None)
+    dm.pivot_table(types=types, timeframes=timeframes, start=start, end=end, remainder="close")
+    dm.synchronize_dataset(types=types, timeframes=timeframes, start=start, end=end)
+    # dm.combine_pivot_tables(types=["ETF"], timeframe=timeframes[0])
+    
+    

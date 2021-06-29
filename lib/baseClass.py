@@ -3,12 +3,12 @@ from datetime import datetime
 
 class BaseClass:
 
-    def __init__(self, folder=None, verbose=False):
+    def __init__(self, folder, verbose):
         self.verbose = verbose
         if folder:
             self.path = folder
         else:
-            self.path = os.path.dirname(os.path.dirname(os.path.realpath(__file__))) 
+            self.path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
     def print(self, msg):
             if self.verbose:
@@ -22,4 +22,4 @@ class BaseClass:
             os.makedirs(self.path + f"/{folder}/")
 
 if __name__ == "__main__":
-    print(BaseClass().path)
+    pass
