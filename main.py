@@ -11,14 +11,14 @@ if __name__ == "__main__":
     end = pd.to_datetime("2022-01-01")
 
     dm = DataManager(folder=folder, plot=True, num_cores=16)
-    dm.create_dataset(types=types, timeframes=timeframes,
-                     indicators=True,
-                     normalize=True,
-                     historic_returns=return_periods,
-                     forward_returns=return_periods,
-                     n_rand=None)
+    # dm.create_dataset(types=types, timeframes=timeframes,
+    #                  indicators=True,
+    #                  normalize=True,
+    #                  historic_returns=return_periods,
+    #                  forward_returns=return_periods,
+    #                  n_rand=10)
     dm.pivot_table(types=types, timeframes=timeframes, start=start, end=end, remainder="close")
-    dm.synchronize_dataset(types=types, timeframes=timeframes, start=start, end=end)
+    # dm.synchronize_dataset(types=types, timeframes=timeframes, start=start, end=end)
     # dm.combine_pivot_tables(types=["ETF"], timeframe=timeframes[0])
     
     

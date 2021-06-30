@@ -26,43 +26,52 @@ class DataManager(BaseClass):
                         n_rand=None
                         ):
         """
-        This function collects all files that match 'types' and 'timeframes', calculates indicators if choosen, and
-        concatenates all files on axis 0.
+        This function collects all files that match 'types' and 'timeframes', calculates 
+        indicators if choosen, and concatenates all files on axis 0.
 
         Inputs
             types:              List containing strings that specifies the asset class 
             timeframes:         List containing integers with the timeframes of choice. In minutes.
             indicators:         Bool that indicates if indicators should be calculated
-            normalize:          Bool that indicates if indicators should be normalized following the logic definded in 'indicator_settings'
-            historic_returns:   List of integers that contains periods for which 'historic' returns should be calculated
-            forward_returns:    List of integers that contains periods for which 'historic' returns should be calculated and shifted to form 'target' returns
+            normalize:          Bool that indicates if indicators should be normalized following 
+                                the logic definded in 'indicator_settings'
+            historic_returns:   List of integers that contains periods for which 'historic' returns 
+                                should be calculated
+            forward_returns:    List of integers that contains periods for which 'historic' returns 
+                                should be calculated and shifted to form 'target' returns
+            n_rand:             Integer that specifies how many random tickers should be drawn
 
         Outputs
             df:                 Pandas DataFrame that contains all assets concatenated on axis 0.
         """
 
+        # Get available files
         self.create_folder(folder="Datasets")
         av_files = pl.read_csv(f"{self.path}/Temp/available_files.csv").to_pandas()
 
         for typ in types:
             for timeframe in timeframes:
-                l = []
+                # Filter for types and timeframes
                 ind = np.logical_and(av_files.loc[:, "type"]        == typ,
                                      av_files.loc[:, "timeframe"]   == timeframe)
-                ind = np.logical_and(ind , ["ETC" not in name for name in av_files.loc[:, "name"]])
-
+                # ind = np.logical_and(ind , ["ETC" not in name for name in av_files.loc[:, "name"]])
                 ticker_list = av_files.loc[ind]
                 self.print(msg=f"Gathering:\t{typ}, timeframe: {timeframe}...")
 
+                # Gathering information and putting workload to Pool
+                l = []
                 [l.append((symbol, path, indicators, normalize, historic_returns, forward_returns))
-                for symbol, path in ticker_list.loc[:, ["symbol", "path"]].to_numpy()]
+                       for symbol, path in ticker_list.loc[:, ["symbol", "path"]].to_numpy()]
 
-                if n_rand: l = random.sample(l, n_rand) 
+                # n random samples
+                if n_rand: 
+                    l = random.sample(l, n_rand) 
+
                 with Pool(self.num_cores) as p:
                     res = p.starmap(self._load_file, l)
 
                 df = pd.concat(res) 
-                self.print(msg=f"Gathering:\tFiles remaining:\t{len(df.symbol.unique())} / {len(ticker_list)}")
+                self.print(msg=f"Gathering:\tFiles remaining:\t{len(df.symbol.unique())} / {len(l)}")
                 pl.from_pandas(df).to_parquet(f"{self.path}/DataSets/{typ}_{timeframe}.parquet")
                 self.print(msg=f"Gathering:\t{typ}, timeframe: {timeframe} finished!")
                 self.print(msg=f"\n{df.info()}\n")
@@ -86,30 +95,37 @@ class DataManager(BaseClass):
 
         for typ in types:
             for timeframe in timeframes:
-                if timeframe < 1440: n_thresh = 10
+
+                # Loading dataset
                 self.print(msg=f"Synchronizing {typ}_{timeframe}")
                 df = pl.read_parquet(f"{self.path}Datasets/{typ}_{timeframe}.parquet").to_pandas()
                 df.date = pd.to_datetime(df.date)
                 df.set_index(["date", "symbol"], inplace=True)
                 
-                t = df.close.reset_index("symbol").pivot(columns="symbol")
-                t.columns = [col[1] for col in t.columns]
-                t = t.loc[start:end, :]
+                # Pivoting around close
+                pivot_table = df.close.reset_index("symbol").pivot(columns="symbol")
+                pivot_table.columns = [col[1] for col in pivot_table.columns]
+                pivot_table = pivot_table.loc[start:end, :]
 
-                consecutive_nulls = self._consec_null(nulls=1*t.isnull(), thresh=n_thresh)
+                # Determining max consecutive missing values 
+                if timeframe < 1440: n_thresh = 16
+                consecutive_nulls = self._consec_null(nulls=1*pivot_table.isnull(), n_thresh=n_thresh)
                 maxs = consecutive_nulls.max(axis=0)
                 
+                # Determining the columns to include
                 cols = maxs.loc[maxs.values < n_thresh].index
-                dates = t.index.get_level_values(0)
+                dates = pivot_table.index.get_level_values(0)
+
+                # Creating MultiIndex for output
                 inds = []; [[inds.append((date, col)) for date in dates] for col in cols]
                 inds = pd.MultiIndex.from_tuples(inds, names=df.index.names)
                 
+                # Filling remaining symbols in nan DF via intersection
                 new_df = pd.DataFrame(np.nan, index=inds, columns=df.columns)
                 new_df = new_df.combine_first(df.loc[inds.intersection(df.index)])
-                self.print(msg=f"Files remaining: {np.sum(maxs.values < n_thresh)} / {len(maxs.values)}")
-                new_df = self._fill_nans(df=new_df)
-                new_df = new_df.reset_index()
+                new_df = self._fill_nans(df=new_df).reset_index()
                 new_df.date = new_df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
+                self.print(msg=f"Files remaining: {np.sum(maxs.values < n_thresh)} / {len(maxs.values)}")
 
                 pl.from_pandas(new_df).to_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_synchronized.parquet")
 
@@ -133,15 +149,17 @@ class DataManager(BaseClass):
 
         for typ in types:
             for timeframe in timeframes:
-                if timeframe < 1440: n_thresh = 16
+                
                 self.print(msg=f"Pivoting:\t{typ}_{timeframe} - Remainder: {remainder}")
+
+                # Special case if adjusted price data is available
                 try:
-                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet", columns=["date", "symbol", "close", "adjclose"])
-                    if f"adj{remainder}" in df.columns: remainder = f"adj{remainder}"
+                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet", columns=["date", "symbol", "adjclose"])
+                    if f"adj{remainder}" in df.columns: 
+                        remainder = f"adj{remainder}"
                 except:
-                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet", columns=["date", "symbol", "close", "adjusted_close"])
+                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet", columns=["date", "symbol", "adjusted_close"])
   
-                df = df.loc[:, ["date", "symbol", remainder]]
                 df.set_index('date', inplace=True)
                 df.index = pd.to_datetime(df.index).tz_localize(None)
                 
@@ -150,18 +168,18 @@ class DataManager(BaseClass):
                 df.columns = [col[1] for col in df.columns]
                 df = df.loc[start:end]
                 
-
-                consecutive_nulls = self._consec_null(nulls=df.isnull().astype(np.int16), thresh=n_thresh)
+                # Determining max consecutive nulls of collumns
+                if timeframe < 1440: n_thresh = 16
+                consecutive_nulls = self._consec_null(nulls=df.isnull().astype(np.int32), n_thresh=n_thresh)
                 maxs = consecutive_nulls.max(axis=0)
-                cols = maxs.loc[maxs.values < n_thresh].index
 
-                df = df.loc[:, cols]
-                self.print(msg=f"Symbols remaining: {np.sum(maxs.values < n_thresh)} / {len(maxs.values)}")
-                df = self._fill_nans(df=df)
-                df = df.reset_index()
+                # Determining columns to include, final assembly
+                df = df.loc[:, maxs.loc[maxs.values < n_thresh].index]
+                df = self._fill_nans(df=df).reset_index()
                 df.date = df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
-                self.print(msg=df.info())
-                pl.from_pandas(df).to_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_{remainder}_pivot.parquet")
+
+                self.print(msg=f"Symbols remaining: {np.sum(maxs.values < n_thresh)} / {len(maxs.values)}")
+                pl.from_pandas(df).to_csv(f"{self.path}/Datasets/{typ}_{timeframe}_pivot.csv")
 
         return df
 
@@ -178,46 +196,53 @@ class DataManager(BaseClass):
         """
         l = []
         for typ in types:
-            df = pl.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_adjclose_pivot.parquet").to_pandas()
-            df.set_index("date", inplace=True)
-            df.index = pd.to_datetime(df.index)
-
-            df.columns = df.columns + "_" + typ
+            df = pl.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_pivot.parquet").to_pandas()
+            df.columns[1:] = df.columns[1:] + "_" + typ
             l.append(df)
 
         df = pd.concat(l, axis=1)
-        df.reset_index(inplace=True)
-        pl.from_pandas(df).to_parquet(f"{self.path}/Datasets/Ultra_{timeframe}.parquet")
+        pl.from_pandas(df).to_parquet(f"{self.path}/Datasets/Ultra_{timeframe}_pivot.parquet")
 
         return df
 
     def _load_file(self, symbol, path, indicators, normalize, historic_returns, forward_returns):
+        """ Helper function that loads and processes a single file """
+
+        # Load the file and fillna volume
         df = pl.read_csv(path).to_pandas()
         df.columns = [col.lower() for col in df.columns]
-        df.drop_duplicates(subset=['date'], inplace=True)
-
-        df, flag = self._filter_ticker(df, ticker=symbol)
-        if flag: return pd.DataFrame()
         df.volume.fillna(0, inplace=True)
 
-        if historic_returns or forward_returns: df = get_returns(df, historic_returns=historic_returns, forward_returns=forward_returns)
-        if indicators: df, flag = get_indicators(df=df, settings=settings, normalize=normalize, verbose=False)
-        if flag: self.print(msg=f"{symbol} getting indicators failed!"); return pd.DataFrame()
+        # Check price data 
+        df, flag = self._filter_ticker(df, ticker=symbol)
+        if flag: return pd.DataFrame()
+
+        # Calculating returns
+        if historic_returns or forward_returns: 
+            df = get_returns(df, historic_returns=historic_returns, forward_returns=forward_returns)
+        if indicators: 
+            df, flag = get_indicators(df=df, settings=settings, normalize=normalize, verbose=False)
+        if flag: 
+            self.print(msg=f"{symbol} getting indicators failed!")
+            return pd.DataFrame()
         
+        df.replace([-np.inf, np.inf], np.nan, inplace=True)
+        print(df.isnull().sum(axis=0)[df.isnull().sum(axis=0) > 0])
         df.dropna(inplace=True)
         df.insert(loc=1, column="symbol", value=symbol)
-        df.reset_index(inplace=True)  
-        df.drop(columns="index", inplace=True) 
+        df = df.reset_index().drop(columns="index")
         df.date = df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
 
         return df
 
     def _fill_nans(self, df):
+        """ Helper function that forward and backwards fills missing values """
+
         self.print(msg=f"Missing values before 'ffill': {df.isnull().sum().sum(), df.isnull().sum(axis=0).max()}")
         df.fillna(method="ffill", inplace=True)
-        self.print(msg=f"Missing values after 'ffill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
+        self.print(msg=f"Missing values after  'ffill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
         df.fillna(method="bfill", inplace=True)
-        self.print(msg=f"Missing values after 'bfill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
+        self.print(msg=f"Missing values after  'bfill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
         
         return df
 
@@ -236,7 +261,7 @@ class DataManager(BaseClass):
         monotony = np.sum(deltas.values == 0) / length
         max_consec_mono = self._consec_null(pd.DataFrame( 1 * (deltas.values == 0))).max().values[0]
 
-        if max_delta > max_delta or end_return < 0.5 or length < minlen or max_consec_mono > max_mono:
+        if max_delta > max_delta or length < minlen or max_consec_mono > max_mono:
             if self.plot:
                 fig = plt.figure(figsize=(12,8))
                 axs = fig.subplots(2, sharex=True)
@@ -251,7 +276,7 @@ class DataManager(BaseClass):
 
         return df, False
 
-    def _consec_null(self, nulls, thresh=1):
+    def _consec_null(self, nulls, n_thresh=1):
         out = nulls
         nulls = nulls.to_numpy()
         l = len(nulls)
@@ -261,11 +286,11 @@ class DataManager(BaseClass):
                 pre = (nulls[i-1,:], 0)
                 now = (nulls[i,:], 0)
                 if i != l:
-                    nulls[i,:] = (pre[0] + now[0]) * np.max(nulls[i:i+thresh+1,:], axis=0)
+                    nulls[i,:] = (pre[0] + now[0]) * np.max(nulls[i:i+n_thresh+1,:], axis=0)
                 else:
                     nulls[i,:] = (pre[0] + now[0]) * now[0]
         out = pd.DataFrame(nulls, columns=out.columns, index=out.index)
-
+        out.to_csv("abc.csv")
         return out
 
 if __name__ == "__main__":
