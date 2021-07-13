@@ -10,7 +10,7 @@ class BaseClass:
         else:
             self.path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
-    def print(self, msg):
+    def _print(self, msg):
             if self.verbose:
                 print(f"{datetime.now().time().strftime('%H:%M:%S')}:\t{msg}")
 

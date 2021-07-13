@@ -23,21 +23,21 @@ def get_indicators(df, settings, normalize=False, verbose=True):
     if "adjclose" in df.columns:
         tag = "adj"
         inputs = {
-            'open': df[f"{tag}open"].to_numpy().astype(float),
-            'high': df[f"{tag}high"].to_numpy().astype(float),
-            'low': df[f"{tag}low"].to_numpy().astype(float),
-            'close': df[f"{tag}close"].to_numpy().astype(float),
-            'volume': df[f"{tag}volume"].to_numpy().astype(float) + 1e-9
+            'open': df[f"{tag}open"].to_numpy().astype(float)+1,
+            'high': df[f"{tag}high"].to_numpy().astype(float)+1,
+            'low': df[f"{tag}low"].to_numpy().astype(float)+1,
+            'close': df[f"{tag}close"].to_numpy().astype(float)+1,
+            'volume': df[f"{tag}volume"].to_numpy().astype(float)+1
         }
 
     elif "adjusted_close" in df.columns:
 
         inputs = {
-            'open': df[f"adjusted_close"].to_numpy().astype(float),
-            'high': df[f"high"].to_numpy().astype(float),
-            'low': df[f"low"].to_numpy().astype(float),
-            'close': df[f"close"].to_numpy().astype(float),
-            'volume': df[f"volume"].to_numpy().astype(float) + 1e-9
+            'open': df[f"adjusted_close"].to_numpy().astype(float)+1,
+            'high': df[f"high"].to_numpy().astype(float)+1,
+            'low': df[f"low"].to_numpy().astype(float)+1,
+            'close': df[f"close"].to_numpy().astype(float)+1,
+            'volume': df[f"volume"].to_numpy().astype(float)+1
         }
 
     # Indicators

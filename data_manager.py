@@ -3,18 +3,21 @@ import numpy as np
 import polars as pl
 import pandas as pd
 import matplotlib.pyplot as plt
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 from lib.baseClass import BaseClass
 from lib.indicator_settings import settings
 from lib.indicators import get_indicators, get_returns
 
 class DataManager(BaseClass):
     
-    def __init__(self, folder=None, verbose=True, save=True, plot=True, num_cores=1):
+    def __init__(self, folder=None, verbose=True, save=True, plot=True, num_cores=None):
         super().__init__(folder=folder, verbose=verbose)
         self.save = save
         self.plot = plot
-        self.num_cores = num_cores
+        if not num_cores:
+            self.num_cores = cpu_count()
+        else:
+            self.num_cores = num_cores
 
     def create_dataset( self,
                         types,
@@ -25,24 +28,33 @@ class DataManager(BaseClass):
                         forward_returns=None, 
                         n_rand=None
                         ):
-        """
-        This function collects all files that match 'types' and 'timeframes', calculates 
-        indicators if choosen, and concatenates all files on axis 0.
+        """ This function collects all files that match 'types' and 'timeframes', calculates 
+        indicators and/or normalizes data if choosen, and concatenates all files on axis 0.
 
-        Inputs
-            types:              List containing strings that specifies the asset class 
-            timeframes:         List containing integers with the timeframes of choice. In minutes.
-            indicators:         Bool that indicates if indicators should be calculated
-            normalize:          Bool that indicates if indicators should be normalized following 
-                                the logic definded in 'indicator_settings'
-            historic_returns:   List of integers that contains periods for which 'historic' returns 
-                                should be calculated
-            forward_returns:    List of integers that contains periods for which 'historic' returns 
-                                should be calculated and shifted to form 'target' returns
-            n_rand:             Integer that specifies how many random tickers should be drawn
+        Parameters
+        ----------
+        types: list           
+            List containing strings that specifies the asset class 
+        timeframes: list        
+            List containing integers with the timeframes of choice. In minutes.
+        indicators: boolean        
+            If True, technical indicators will be calculated.
+        normalize: boolean          
+            If True, technical indicators will be normalized following the logic 
+            definded in 'indicator_settings'
+        historic_returns: list 
+            List of integers that contains periods for which 'historic' returns 
+            should be calculated
+        forward_returns: list  
+            List of integers that contains periods for which 'historic' returns 
+            should be calculated and shifted to form 'target' returns
+        n_rand: int            
+            Integer that specifies how many random tickers should be drawn
 
-        Outputs
-            df:                 Pandas DataFrame that contains all assets concatenated on axis 0.
+        Returns
+        -------
+            df: pd.DataFrame           
+            Table containing all assets concatenated on axis 0.
         """
 
         # Get available files
@@ -56,7 +68,7 @@ class DataManager(BaseClass):
                                      av_files.loc[:, "timeframe"]   == timeframe)
                 # ind = np.logical_and(ind , ["ETC" not in name for name in av_files.loc[:, "name"]])
                 ticker_list = av_files.loc[ind]
-                self.print(msg=f"Gathering:\t{typ}, timeframe: {timeframe}...")
+                self._print(msg=f"Gathering:\t{typ}, timeframe: {timeframe}...")
 
                 # Gathering information and putting workload to Pool
                 l = []
@@ -71,33 +83,40 @@ class DataManager(BaseClass):
                     res = p.starmap(self._load_file, l)
 
                 df = pd.concat(res) 
-                self.print(msg=f"Gathering:\tFiles remaining:\t{len(df.symbol.unique())} / {len(l)}")
+                self._print(msg=f"Gathering:\tFiles remaining:\t{len(df.symbol.unique())}/{len(l)}")
                 pl.from_pandas(df).to_parquet(f"{self.path}/DataSets/{typ}_{timeframe}.parquet")
-                self.print(msg=f"Gathering:\t{typ}, timeframe: {timeframe} finished!")
-                self.print(msg=f"\n{df.info()}\n")
+                self._print(msg=f"Gathering:\t{typ}, timeframe: {timeframe} finished!")
+                self._print(msg=f"\n{df.info()}\n")
 
         return df
 
     def synchronize_dataset(self, types, timeframes, start, end, n_thresh=5):
-        """
-        This function synchronizes assets for a given time period. 
+        """ This function synchronizes assets for a given time period. 
 
-        Inputs
-            types:          List containing strings that specifies the asset class 
-            timeframes:     List containing integers with the timeframes of choice. In minutes.
-            start:          Pandas Timestamp that defines the start of the time period of interest.
-            end:            Pandas Timestamp that defines the end of the time period of interest.
-            n_thresh:       Integer that mirrors the tolerance of consecutive missing values befor exclusion.
+        Parameters
+        ----------
+        types: list         
+            List containing strings that specifies the asset class 
+        timeframes: list     
+            List containing integers with the timeframes of choice. In minutes.
+        start: pandas.Timestamp         
+            Timestamp that defines the start of the time period of interest.
+        end: pandas.Timestamp           
+            Pandas Timestamp that defines the end of the time period of interest.
+        n_thresh: int      
+            Integer that mirrors the tolerance of consecutive missing values befor exclusion.
 
-        Outputs
-            new_df:         Pandas DataFrame that contains all assets synchronized from start to end.
+        Returns
+        -------
+        new_df: pandas.DataFrame        
+            Table that contains all assets synchronized from start to end.
         """
 
         for typ in types:
             for timeframe in timeframes:
 
                 # Loading dataset
-                self.print(msg=f"Synchronizing {typ}_{timeframe}")
+                self._print(msg=f"Synchronizing {typ}_{timeframe}")
                 df = pl.read_parquet(f"{self.path}Datasets/{typ}_{timeframe}.parquet").to_pandas()
                 df.date = pd.to_datetime(df.date)
                 df.set_index(["date", "symbol"], inplace=True)
@@ -125,40 +144,53 @@ class DataManager(BaseClass):
                 new_df = new_df.combine_first(df.loc[inds.intersection(df.index)])
                 new_df = self._fill_nans(df=new_df).reset_index()
                 new_df.date = new_df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
-                self.print(msg=f"Files remaining: {np.sum(maxs.values < n_thresh)} / {len(maxs.values)}")
+                self._print(msg=f"Files remaining: {np.sum(maxs.values < n_thresh)}/{len(maxs.values)}")
 
-                pl.from_pandas(new_df).to_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_synchronized.parquet")
+                pl.from_pandas(new_df).to_parquet(
+                    f"{self.path}/Datasets/{typ}_{timeframe}_synchronized.parquet"
+                    )
 
         return new_df 
     
-    def pivot_table(self, types, timeframes, start, end, remainder="close", n_thresh=5):
-        """
-        This function pivots a specific column in the asset dataset and synchronizes the pivot table. 
+    def pivot_table(self, types, timeframes, start, end, remainder="close", n_thresh=6):
+        """ This function pivots a specific column in the asset dataset and synchronizes 
+            the pivot table. 
 
-        Inputs
-            types:          List containing strings that specifies the asset class 
-            timeframes:     List containing integers with the timeframes of choice. In minutes.
-            start:          Pandas Timestamp that defines the start of the time period of interest.
-            end:            Pandas Timestamp that defines the end of the time period of interest.
-            remainder:      String that specifies the column over which should be pivoted.
-            n_thresh:       Integer that mirrors the tolerance of consecutive missing values befor exclusion.
+        Parameters
+        ----------
+        types: list          
+            List containing strings that specifies the asset class 
+        timeframes: list    
+            List containing integers with the timeframes of choice. In minutes.
+        start: pandas.Timestamp          
+            Timestamp that defines the start of the time period of interest.
+        end: pandas.Timestamp           
+            Timestamp that defines the end of the time period of interest.
+        remainder: str     
+            String that specifies the column over which should be pivoted.
+        n_thresh: int      
+            Integer that mirrors the tolerance of consecutive missing values befor exclusion.
 
-        Outputs
-            new_df:         Pandas DataFrame that contains all assets synchronized from start to end.
+        Returns
+        -------
+        new_df: pandas.DataFrame        
+            Table that contains the remainder of all selected assets synchronized from start to end.
         """
 
         for typ in types:
             for timeframe in timeframes:
                 
-                self.print(msg=f"Pivoting:\t{typ}_{timeframe} - Remainder: {remainder}")
+                self._print(msg=f"Pivoting:\t{typ}_{timeframe} - Remainder: {remainder}")
 
                 # Special case if adjusted price data is available
                 try:
-                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet", columns=["date", "symbol", "adjclose"])
-                    if f"adj{remainder}" in df.columns: 
-                        remainder = f"adj{remainder}"
+                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet",
+                                         columns=["date", "symbol", "adjclose"])
+                    remainder = "adjclose"
                 except:
-                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet", columns=["date", "symbol", "adjusted_close"])
+                    df = pd.read_parquet(f"{self.path}/Datasets/{typ}_{timeframe}.parquet",
+                                         columns=["date", "symbol", "adjusted_close"])
+                    remainder = "adjusted_close"
   
                 df.set_index('date', inplace=True)
                 df.index = pd.to_datetime(df.index).tz_localize(None)
@@ -166,11 +198,15 @@ class DataManager(BaseClass):
                 # Pivot and select time period
                 df = df.pivot(columns='symbol')
                 df.columns = [col[1] for col in df.columns]
-                df = df.loc[start:end]
+                liste = ["LYPG", "QDVR", "EL4C", "USPY", "T3KE", "IQQT", "ETLH", "LYMD", "LCTR", "DBXH",
+                         "WTEJ", "SPF1", "QDVE", "EMQQ", "EKUS", "DBPG", "BLUM", "WTI2", "BATE", "XDEQ",
+                         "IQQH", "XAIX", "XMLH", "2B78", "LYPA", "BNXG", "ROAI", "GENY", "ELCR", "DRUP", 
+                         "DX2D", "SNAZ", "18MU", "FRC4", "LYQ7", "SC0P"]
+                df = df.loc[start:end, liste]
                 
                 # Determining max consecutive nulls of collumns
                 if timeframe < 1440: n_thresh = 16
-                consecutive_nulls = self._consec_null(nulls=df.isnull().astype(np.int32), n_thresh=n_thresh)
+                consecutive_nulls = self._consec_null(df.isnull().astype(np.int32), n_thresh)
                 maxs = consecutive_nulls.max(axis=0)
 
                 # Determining columns to include, final assembly
@@ -178,21 +214,25 @@ class DataManager(BaseClass):
                 df = self._fill_nans(df=df).reset_index()
                 df.date = df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
 
-                self.print(msg=f"Symbols remaining: {np.sum(maxs.values < n_thresh)} / {len(maxs.values)}")
-                pl.from_pandas(df).to_csv(f"{self.path}/Datasets/{typ}_{timeframe}_pivot.csv")
+                self._print(msg=f"Symbols remaining: {np.sum(maxs.values < n_thresh)}/{len(maxs.values)}")
+                pl.from_pandas(df).to_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_pivot.parquet")
 
         return df
 
     def combine_pivot_tables(self, types, timeframe):
-        """
-        This function concatenates pivot tables horizontally. 
+        """ This function concatenates pivot tables horizontally. 
 
-        Inputs
-            types:          List containing strings that specify the asset classes to combine. 
-            timeframe:      Integer with the timeframe of choice. In minutes.
+        Parameters
+        ----------
+        types: list         
+            List containing strings that specify the asset classes to combine. 
+        timeframe: int     
+            Integer with the timeframe of choice. In minutes.
 
-        Outputs
-            df:             Pandas DataFrame that contains all asset pivot tables concatenated over axis 1.
+        Returns
+        -------
+        df: pandas.DataFrame            
+            Tablethat contains all asset pivot tables concatenated over axis 1.
         """
         l = []
         for typ in types:
@@ -211,7 +251,7 @@ class DataManager(BaseClass):
         # Load the file and fillna volume
         df = pl.read_csv(path).to_pandas()
         df.columns = [col.lower() for col in df.columns]
-        df.volume.fillna(0, inplace=True)
+        # df.volume.fillna(0, inplace=True)
 
         # Check price data 
         df, flag = self._filter_ticker(df, ticker=symbol)
@@ -223,12 +263,10 @@ class DataManager(BaseClass):
         if indicators: 
             df, flag = get_indicators(df=df, settings=settings, normalize=normalize, verbose=False)
         if flag: 
-            self.print(msg=f"{symbol} getting indicators failed!")
+            self._print(msg=f"{symbol} getting indicators failed!")
             return pd.DataFrame()
         
-        df.replace([-np.inf, np.inf], np.nan, inplace=True)
-        print(df.isnull().sum(axis=0)[df.isnull().sum(axis=0) > 0])
-        df.dropna(inplace=True)
+        df = df.replace([-np.inf, np.inf], np.nan).dropna()
         df.insert(loc=1, column="symbol", value=symbol)
         df = df.reset_index().drop(columns="index")
         df.date = df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
@@ -238,15 +276,15 @@ class DataManager(BaseClass):
     def _fill_nans(self, df):
         """ Helper function that forward and backwards fills missing values """
 
-        self.print(msg=f"Missing values before 'ffill': {df.isnull().sum().sum(), df.isnull().sum(axis=0).max()}")
+        self._print(msg=f"Missing values before 'ffill': {df.isnull().sum().sum(), df.isnull().sum(axis=0).max()}")
         df.fillna(method="ffill", inplace=True)
-        self.print(msg=f"Missing values after  'ffill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
+        self._print(msg=f"Missing values after  'ffill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
         df.fillna(method="bfill", inplace=True)
-        self.print(msg=f"Missing values after  'bfill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
+        self._print(msg=f"Missing values after  'bfill': {df.isnull().sum().sum(), df.isnull().sum().max()}")
         
         return df
 
-    def _filter_ticker(self, df, ticker, max_delta=1, max_mono=100, minlen=100):
+    def _filter_ticker(self, df, ticker, max_delta=1, max_mono=10, minlen=100):
         
         close = df.loc[:, ["date", "adjusted_close" if "adjusted_close" in df.columns else "close"]]
         close.columns = ["date", "close"]
@@ -261,16 +299,20 @@ class DataManager(BaseClass):
         monotony = np.sum(deltas.values == 0) / length
         max_consec_mono = self._consec_null(pd.DataFrame( 1 * (deltas.values == 0))).max().values[0]
 
-        if max_delta > max_delta or length < minlen or max_consec_mono > max_mono:
+        if end_return < 0.1 or max_delta > max_delta or length < minlen or max_consec_mono > max_mono:
             if self.plot:
                 fig = plt.figure(figsize=(12,8))
                 axs = fig.subplots(2, sharex=True)
                 close.plot(ax=axs[0])
                 axs[1].plot(deltas)
-                plt.title(f"{ticker}: max_delta: {round(max_delta[0], 2)}, length: {length}, monotony: {round(monotony, 2)}, max_mono: {max_consec_mono}")
+                plt.title((f"{ticker}: max_delta: {round(max_delta[0], 2)}, ",
+                           f"length: {length}, monotony: {round(monotony, 2)}, ",
+                           f"max_mono: {max_consec_mono}"))
                 plt.savefig(f"Temp/{ticker}.png")
                 plt.close()
-            self.print(msg=f"{ticker}\texcluded! max_delta: {round(max_delta[0], 2)},\tlength: {length},\tmonotony: {round(monotony, 2)},\tmax_mono: {max_consec_mono}\tend_return: {round(end_return,2)}")
+            self._print((f"{ticker}\texcluded! max_delta: {round(max_delta[0], 2)},\t",
+                         f"length: {length},\tmonotony: {round(monotony, 2)},\t",
+                         f"max_mono: {max_consec_mono}\tend_return: {round(end_return,2)}"))
       
             return None, True
 
@@ -290,7 +332,7 @@ class DataManager(BaseClass):
                 else:
                     nulls[i,:] = (pre[0] + now[0]) * now[0]
         out = pd.DataFrame(nulls, columns=out.columns, index=out.index)
-        out.to_csv("abc.csv")
+        # out.to_csv("abc.csv")
         return out
 
 if __name__ == "__main__":

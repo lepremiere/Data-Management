@@ -1,4 +1,8 @@
 {
     "python.pythonPath": "C:\\ProgramData\\Anaconda3\\envs\\Reinforce\\python.exe",
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "editor.rulers": [99],
+    "workbench.colorCustomizations": {
+        "editorRuler.foreground": "#353535"
+    }
 }
