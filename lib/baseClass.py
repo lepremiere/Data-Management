@@ -3,10 +3,10 @@ from datetime import datetime
 
 class BaseClass:
 
-    def __init__(self, folder, verbose):
+    def __init__(self, root, verbose):
         self.verbose = verbose
-        if folder:
-            self.path = folder
+        if root:
+            self.path = root
         else:
             self.path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
@@ -18,7 +18,7 @@ class BaseClass:
         """ Check if folder exists, otherwise creating it """
 
         if not os.path.exists(self.path + f"/{folder}/"):
-            self.print(msg=f"Creating new folder {folder}...")
+            self._print(msg=f"Creating new folder {folder}...")
             os.makedirs(self.path + f"/{folder}/")
 
 if __name__ == "__main__":

@@ -5,15 +5,20 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from multiprocessing import Pool, cpu_count
 from lib.baseClass import BaseClass
-from lib.indicator_settings import settings
-from lib.indicators import get_indicators, get_returns
 
 class DataManager(BaseClass):
     
-    def __init__(self, folder=None, verbose=True, save=True, plot=True, num_cores=None):
-        super().__init__(folder=folder, verbose=verbose)
+    def __init__(self, 
+                root=None, 
+                fmt="parquet",
+                verbose=True, 
+                save=False, 
+                plot=True, 
+                num_cores=None):
+        super().__init__(root=root, verbose=verbose)
         self.save = save
         self.plot = plot
+        self.fmt = fmt
         if not num_cores:
             self.num_cores = cpu_count()
         else:
@@ -22,11 +27,8 @@ class DataManager(BaseClass):
     def create_dataset( self,
                         types,
                         timeframes, 
-                        indicators=False, 
-                        normalize=False, 
-                        historic_returns=None, 
-                        forward_returns=None, 
-                        n_rand=None
+                        n_rand=None,
+                        selection=None
                         ):
         """ This function collects all files that match 'types' and 'timeframes', calculates 
         indicators and/or normalizes data if choosen, and concatenates all files on axis 0.
@@ -37,17 +39,6 @@ class DataManager(BaseClass):
             List containing strings that specifies the asset class 
         timeframes: list        
             List containing integers with the timeframes of choice. In minutes.
-        indicators: boolean        
-            If True, technical indicators will be calculated.
-        normalize: boolean          
-            If True, technical indicators will be normalized following the logic 
-            definded in 'indicator_settings'
-        historic_returns: list 
-            List of integers that contains periods for which 'historic' returns 
-            should be calculated
-        forward_returns: list  
-            List of integers that contains periods for which 'historic' returns 
-            should be calculated and shifted to form 'target' returns
         n_rand: int            
             Integer that specifies how many random tickers should be drawn
 
@@ -63,16 +54,20 @@ class DataManager(BaseClass):
 
         for typ in types:
             for timeframe in timeframes:
-                # Filter for types and timeframes
-                ind = np.logical_and(av_files.loc[:, "type"]        == typ,
-                                     av_files.loc[:, "timeframe"]   == timeframe)
-                # ind = np.logical_and(ind , ["ETC" not in name for name in av_files.loc[:, "name"]])
-                ticker_list = av_files.loc[ind]
+                if selection:
+                    ticker_list = av_files.loc[[symbol in selection 
+                                                for symbol in av_files.symbol]] 
+                    print(ticker_list)
+                else:
+                    # Filter for types and timeframes
+                    ind = np.logical_and(av_files.loc[:, "type"     ] == typ,
+                                         av_files.loc[:, "timeframe"] == timeframe)
+                    ticker_list = av_files.loc[ind]
                 self._print(msg=f"Gathering:\t{typ}, timeframe: {timeframe}...")
 
                 # Gathering information and putting workload to Pool
                 l = []
-                [l.append((symbol, path, indicators, normalize, historic_returns, forward_returns))
+                [l.append((symbol, path))
                        for symbol, path in ticker_list.loc[:, ["symbol", "path"]].to_numpy()]
 
                 # n random samples
@@ -84,7 +79,10 @@ class DataManager(BaseClass):
 
                 df = pd.concat(res) 
                 self._print(msg=f"Gathering:\tFiles remaining:\t{len(df.symbol.unique())}/{len(l)}")
-                pl.from_pandas(df).to_parquet(f"{self.path}/DataSets/{typ}_{timeframe}.parquet")
+                if self.fmt == "csv":
+                    pl.from_pandas(df).to_csv(f"{self.path}/DataSets/{typ}_{timeframe}.csv")
+                elif self.fmt == "parquet":
+                    pl.from_pandas(df).to_parquet(f"{self.path}/DataSets/{typ}_{timeframe}.parquet")
                 self._print(msg=f"Gathering:\t{typ}, timeframe: {timeframe} finished!")
                 self._print(msg=f"\n{df.info()}\n")
 
@@ -152,7 +150,13 @@ class DataManager(BaseClass):
 
         return new_df 
     
-    def pivot_table(self, types, timeframes, start, end, remainder="close", n_thresh=6):
+    def pivot_table(self, 
+                    types, 
+                    timeframes, 
+                    start, end, 
+                    remainder="close", 
+                    n_thresh=6, 
+                    selection=None):
         """ This function pivots a specific column in the asset dataset and synchronizes 
             the pivot table. 
 
@@ -198,12 +202,11 @@ class DataManager(BaseClass):
                 # Pivot and select time period
                 df = df.pivot(columns='symbol')
                 df.columns = [col[1] for col in df.columns]
-                liste = ["LYPG", "QDVR", "EL4C", "USPY", "T3KE", "IQQT", "ETLH", "LYMD", "LCTR", "DBXH",
-                         "WTEJ", "SPF1", "QDVE", "EMQQ", "EKUS", "DBPG", "BLUM", "WTI2", "BATE", "XDEQ",
-                         "IQQH", "XAIX", "XMLH", "2B78", "LYPA", "BNXG", "ROAI", "GENY", "ELCR", "DRUP", 
-                         "DX2D", "SNAZ", "18MU", "FRC4", "LYQ7", "SC0P"]
-                df = df.loc[start:end, liste]
-                
+                if selection:
+                    df = df.loc[start:end, selection]
+                else:
+                    df = df.loc[start:end, :]
+                    
                 # Determining max consecutive nulls of collumns
                 if timeframe < 1440: n_thresh = 16
                 consecutive_nulls = self._consec_null(df.isnull().astype(np.int32), n_thresh)
@@ -214,8 +217,12 @@ class DataManager(BaseClass):
                 df = self._fill_nans(df=df).reset_index()
                 df.date = df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
 
-                self._print(msg=f"Symbols remaining: {np.sum(maxs.values < n_thresh)}/{len(maxs.values)}")
-                pl.from_pandas(df).to_parquet(f"{self.path}/Datasets/{typ}_{timeframe}_pivot.parquet")
+                self._print(
+                    f"Symbols remaining: {np.sum(maxs.values < n_thresh)}/{len(maxs.values)}"
+                    )
+                pl.from_pandas(df).to_parquet(
+                    f"{self.path}/Datasets/{typ}_{timeframe}_pivot.parquet"
+                    )
 
         return df
 
@@ -245,31 +252,21 @@ class DataManager(BaseClass):
 
         return df
 
-    def _load_file(self, symbol, path, indicators, normalize, historic_returns, forward_returns):
+    def _load_file(self, symbol, path):
         """ Helper function that loads and processes a single file """
 
         # Load the file and fillna volume
-        df = pl.read_csv(path).to_pandas()
+        df = pd.read_csv(path)
         df.columns = [col.lower() for col in df.columns]
-        # df.volume.fillna(0, inplace=True)
+        df.volume.fillna(0, inplace=True)
 
         # Check price data 
-        df, flag = self._filter_ticker(df, ticker=symbol)
+        flag = self._filter_ticker(df.copy(), ticker=symbol)
         if flag: return pd.DataFrame()
-
-        # Calculating returns
-        if historic_returns or forward_returns: 
-            df = get_returns(df, historic_returns=historic_returns, forward_returns=forward_returns)
-        if indicators: 
-            df, flag = get_indicators(df=df, settings=settings, normalize=normalize, verbose=False)
-        if flag: 
-            self._print(msg=f"{symbol} getting indicators failed!")
-            return pd.DataFrame()
         
-        df = df.replace([-np.inf, np.inf], np.nan).dropna()
         df.insert(loc=1, column="symbol", value=symbol)
         df = df.reset_index().drop(columns="index")
-        df.date = df.date.apply(lambda x: x.strftime("%Y-%m-%d %H:%M:%S"))
+        df.date = pd.to_datetime(df.date).dt.strftime("%Y-%m-%d %H:%M:%S")
 
         return df
 
@@ -284,7 +281,7 @@ class DataManager(BaseClass):
         
         return df
 
-    def _filter_ticker(self, df, ticker, max_delta=1, max_mono=10, minlen=100):
+    def _filter_ticker(self, df, ticker, max_delta=0.15, max_mono=20, minlen=100):
         
         close = df.loc[:, ["date", "adjusted_close" if "adjusted_close" in df.columns else "close"]]
         close.columns = ["date", "close"]
@@ -293,30 +290,32 @@ class DataManager(BaseClass):
 
         # Filter: max percentage change, length, monotony/length, max monotony
         deltas = close.pct_change()
-        max_delta = deltas.max().values
+        max_delta = deltas.abs().max().values
         end_return = (close.values[-1]  / close.values[0])[0]
         length = len(close)
         monotony = np.sum(deltas.values == 0) / length
         max_consec_mono = self._consec_null(pd.DataFrame( 1 * (deltas.values == 0))).max().values[0]
 
-        if end_return < 0.1 or max_delta > max_delta or length < minlen or max_consec_mono > max_mono:
+        if end_return < 0.1 or max_delta > max_delta \
+            or length < minlen or max_consec_mono > max_mono \
+                or ticker in ["PR1U", "GOAI", "XY1D", "XIEE", "XHY1", "XCS2"]:
+            
+            self._print((f"{ticker}\texcluded! max_delta: {round(max_delta[0], 2)},\t"
+                         f"length: {length},\tmonotony: {round(monotony, 2)},\t"
+                         f"max_mono: {max_consec_mono}\tend_return: {round(end_return,2)}"))
             if self.plot:
                 fig = plt.figure(figsize=(12,8))
                 axs = fig.subplots(2, sharex=True)
                 close.plot(ax=axs[0])
                 axs[1].plot(deltas)
-                plt.title((f"{ticker}: max_delta: {round(max_delta[0], 2)}, ",
-                           f"length: {length}, monotony: {round(monotony, 2)}, ",
+                plt.title((f"{ticker}: max_delta: {round(max_delta[0], 2)}, "
+                           f"length: {length}, monotony: {round(monotony, 2)}, "
                            f"max_mono: {max_consec_mono}"))
                 plt.savefig(f"Temp/{ticker}.png")
                 plt.close()
-            self._print((f"{ticker}\texcluded! max_delta: {round(max_delta[0], 2)},\t",
-                         f"length: {length},\tmonotony: {round(monotony, 2)},\t",
-                         f"max_mono: {max_consec_mono}\tend_return: {round(end_return,2)}"))
       
-            return None, True
-
-        return df, False
+            return True
+        return False
 
     def _consec_null(self, nulls, n_thresh=1):
         out = nulls
